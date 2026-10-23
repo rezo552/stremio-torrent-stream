@@ -32,6 +32,7 @@ interface ActiveTorrentInfo extends TorrentInfo {
   uploadSpeed: number;
   peers: number;
   openStreams: number;
+  liveFileStreams: number;
   files: ActiveFileInfo[];
 }
 
@@ -63,6 +64,12 @@ const SEED_TIME = Number(process.env.SEED_TIME) || 60 * 1000;
 // Timeout (ms) when adding torrents if no metadata is received (default 5 seconds)
 const TORRENT_TIMEOUT = Number(process.env.TORRENT_TIMEOUT) || 5 * 1000;
 
+// In-memory piece cache slots per streamed torrent (default 5, webtorrent default 20)
+const STORE_CACHE_SLOTS =
+  process.env.STORE_CACHE_SLOTS !== undefined
+    ? Number(process.env.STORE_CACHE_SLOTS)
+    : 5;
+
 const infoClient = new WebTorrent();
 const streamClient = new WebTorrent({
   // @ts-ignore
@@ -90,6 +97,8 @@ const launchTime = Date.now();
 
 export const getStats = () => ({
   uptime: getReadableDuration(Date.now() - launchTime),
+  memory: process.memoryUsage(),
+  pendingTimeouts: timeouts.size,
   openStreams: [...openStreams.values()].reduce((a, b) => a + b, 0),
   downloadSpeed: streamClient.downloadSpeed,
   uploadSpeed: streamClient.uploadSpeed,
@@ -104,6 +113,11 @@ export const getStats = () => ({
     uploadSpeed: torrent.uploadSpeed,
     peers: torrent.numPeers,
     openStreams: openStreams.get(torrent.infoHash) || 0,
+    liveFileStreams: torrent.files.reduce(
+      // @ts-ignore
+      (sum, file) => sum + (file._fileStreams?.size || 0),
+      0
+    ),
     files: torrent.files.map((file) => ({
       name: file.name,
       path: file.path,
@@ -121,6 +135,8 @@ export const getOrAddTorrent = (uri: string) =>
       {
         path: DOWNLOAD_DIR,
         destroyStoreOnDestroy: !KEEP_DOWNLOADED_FILES,
+        // @ts-ignore
+        storeCacheSlots: STORE_CACHE_SLOTS,
         // @ts-ignore
         deselect: true,
       },
@@ -202,11 +218,16 @@ export const streamClosed = (hash: string, fileName: string) => {
   if (timeout) return;
 
   timeout = setTimeout(async () => {
+    // Always clear the entry, a stale one blocks future removal of this torrent
+    timeouts.delete(hash);
+    if (openStreams.get(hash)) return;
+
     const torrent = await streamClient.get(hash);
+    if (!torrent) return;
+
     // @ts-ignore
-    torrent?.destroy(undefined, () => {
+    torrent.destroy(undefined, () => {
       console.log(`Removed torrent: ${torrent.name}`);
-      timeouts.delete(hash);
     });
   }, SEED_TIME);
 

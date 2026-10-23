@@ -79,18 +79,21 @@ router.get("/stream/:torrentUri/:filePath", async (req, res) => {
   res.writeHead(206, headers);
 
   try {
+    // end() waits for the socket to drain; if the client stopped reading it never
+    // does, the stream stays "open" forever and the torrent is never removed
     const noDataTimeout = setTimeout(() => {
-      res.status(500).end();
+      res.destroy();
     }, 10000);
 
     const noReadTimeout = setTimeout(() => {
-      res.status(200).end();
+      res.destroy();
     }, 60000);
 
     const videoStream = file.createReadStream({ start, end });
 
     videoStream.on("data", () => {
       clearTimeout(noDataTimeout);
+      noReadTimeout.refresh();
     });
 
     videoStream.on("readable", () => {
@@ -104,6 +107,10 @@ router.get("/stream/:torrentUri/:filePath", async (req, res) => {
     streamOpened(torrent.infoHash, file.name);
 
     res.on("close", () => {
+      clearTimeout(noDataTimeout);
+      clearTimeout(noReadTimeout);
+      // @ts-ignore
+      videoStream.destroy();
       streamClosed(torrent.infoHash, file.name);
     });
   } catch (error) {
