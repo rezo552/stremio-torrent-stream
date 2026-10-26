@@ -4,7 +4,8 @@
 > Fork of the archived [nyakaspeter/stremio-torrent-stream](https://github.com/nyakaspeter/stremio-torrent-stream) with memory fixes:
 > - file streams and their timers are released when a client disconnects, and stalled clients are dropped (`res.destroy()`) instead of being kept open, so `SEED_TIME` can start and torrents get removed
 > - a stale removal timeout no longer blocks a torrent from ever being removed
-> - `STORE_CACHE_SLOTS` (default `5`, webtorrent default `20`) limits the in-memory piece cache per torrent
+> - `STORE_CACHE_SLOTS` (default `5`, webtorrent default `20`) limits the in-memory piece cache per torrent; `0` disables it, which is best for long seeding (a cached piece stays in RAM as long as any block sliced from it is queued for upload)
+> - `MAX_PEER_UPLOAD_QUEUE` (default `2097152`) caps the bytes queued for upload per peer; further block requests are refused until it drains, since the upload throttle otherwise lets answered requests pile up in RAM
 > - `/stats` also reports `memory`, `pendingTimeouts` and per torrent `liveFileStreams`
 
 > [!IMPORTANT]  

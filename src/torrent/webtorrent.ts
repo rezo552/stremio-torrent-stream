@@ -70,6 +70,10 @@ const STORE_CACHE_SLOTS =
     ? Number(process.env.STORE_CACHE_SLOTS)
     : 5;
 
+// Max bytes queued for upload per peer before its new block requests are refused (default 2 MB)
+const MAX_PEER_UPLOAD_QUEUE =
+  Number(process.env.MAX_PEER_UPLOAD_QUEUE) || 2 * 1024 * 1024;
+
 const infoClient = new WebTorrent();
 const streamClient = new WebTorrent({
   // @ts-ignore
@@ -92,6 +96,24 @@ streamClient.on("error", (error) => {
 });
 
 infoClient.on("error", () => {});
+
+// bittorrent-protocol answers every block request and pushes the data without
+// backpressure, while UPLOAD_SPEED_LIMIT throttles it downstream. Peers request far
+// faster than we upload, so answered blocks piled up in RAM (each one could pin a
+// whole 4-16 MB piece). Refuse new requests while a peer's queue is full.
+const limitUploadQueue = (wire: any) => {
+  const onRequest = wire._onRequest;
+  if (typeof onRequest !== "function") return;
+
+  wire._onRequest = function (index: number, offset: number, length: number) {
+    const queued = this.readableLength + this.peerRequests.length * length;
+    if (queued >= MAX_PEER_UPLOAD_QUEUE) {
+      if (this.hasFast) this.reject(index, offset, length);
+      return;
+    }
+    return onRequest.call(this, index, offset, length);
+  };
+};
 
 const launchTime = Date.now();
 
@@ -145,6 +167,9 @@ export const getOrAddTorrent = (uri: string) =>
         resolve(torrent);
       }
     );
+
+    // Wires connect before metadata arrives, so hook them here rather than on "ready"
+    torrent.on("wire", limitUploadQueue);
 
     const timeout = setTimeout(() => {
       torrent.destroy();
